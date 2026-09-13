@@ -1,0 +1,97 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Container Diagram — облачная кассовая архитектура VitaStore (TO-BE HLD)
+
+Person(buyer, "Покупатель", "Оплачивает покупку наличными или картой")
+Person(cashier, "Кассир", "Оформляет продажу на кассе")
+
+System_Boundary(store, "Магазин (edge, без локального сервера)") {
+    Container(pos, "Cloud POS", "Web POS / планшет, PWA — тонкий клиент", "Кассовый интерфейс, без бизнес-логики и без локальной БД")
+    Container(hal, "Local HAL / Edge Agent", "Hardware Abstraction Layer", "Единый внутренний API для устройств; без администрируемой БД, embedded офлайн-кэш (SQLite)")
+    Container(fiscal, "Фискальный регистратор", "USB, проприетарный протокол", "Печать и фискализация чека")
+    Container(terminal, "Банковский терминал", "USB/serial, проприетарный протокол", "Сбербанк / Альфа / Ingenico / Verifone")
+}
+
+System_Ext(ofd, "ОФД", "Оператор фискальных данных, 54-ФЗ — независимый канал регистратора (SIM/GPRS)")
+
+System_Boundary(cloud, "Облачная платформа VitaStore") {
+    Container(gw, "API Gateway", "managed", "Единая точка входа, TLS, аутентификация")
+    Container(backend, "Cloud POS Backend", "оркестрация чека", "Бизнес-логика продажи, скидки, чек")
+    Container(catalog, "Каталог и цены", "MDM/PIM (SaaS)", "Единый источник номенклатуры и цен")
+    Container(pgw, "Payment Gateway", "облачный", "Маршрутизация и сверка платежей между эквайерами")
+    Container(promo, "Promo / Loyalty Engine", "cloud", "Промоакции и лояльность, поддержка отложенного применения")
+    ContainerDb(cdb, "Managed Cloud DB", "PaaS", "Транзакции, чеки — управляемая БД")
+    Container(sync, "Sync & Queue Service", "event-driven", "Приём офлайн-пакетов, идемпотентная обработка, разрешение конфликтов")
+}
+
+System(sap, "SAP ERP", "существующая система — финансовый и товарный учёт")
+
+Rel(buyer, pos, "Оплата, получение чека")
+Rel(cashier, pos, "Операции по продаже")
+
+Rel(pos, hal, "Печать чека / приём оплаты", "унифицированный локальный API")
+Rel(hal, fiscal, "Команда печати", "протокол вендора, инкапсулирован в HAL")
+Rel(hal, terminal, "Команда оплаты", "протокол вендора, инкапсулирован в HAL")
+Rel(fiscal, ofd, "Фискальные данные", "автономный канал регистратора (SIM/GPRS)")
+
+Rel(pos, gw, "Онлайн-режим", "HTTPS")
+Rel(gw, backend, "Маршрутизация запросов")
+Rel(backend, catalog, "Цены, номенклатура")
+Rel(backend, pgw, "Оплата")
+Rel(backend, promo, "Баллы лояльности")
+Rel(backend, cdb, "Запись транзакций")
+Rel(catalog, hal, "Фоновая синхронизация цен для офлайн-кэша", "периодически, пока есть связь")
+Rel(hal, sync, "Синхронизация офлайн-очереди", "батч, идемпотентно, при восстановлении связи")
+Rel(pgw, sync, "Подтверждённые платежи")
+Rel(promo, sync, "Отложенные начисления баллов")
+Rel(sync, sap, "События продаж", "шина/API — вместо ночного FTP")
+
+note right of hal
+  **Решение: устранение локального сервера**
+  Лёгкий edge-агент без администрируемой БД,
+  со встроенным офлайн-кэшем цен и очередью
+  неотправленных операций.
+
+  **Решение: разнородное "железо" (HAL)**
+  Новое устройство = новый адаптер в HAL.
+  Кассовое приложение не меняется при смене
+  банка или регистратора.
+end note
+
+note bottom of ofd
+  **Офлайн-режим: чек**
+  Регистратор фискализирует чек и передаёт
+  данные в ОФД по собственному каналу —
+  независимо от интернета магазина.
+end note
+
+note right of sync
+  **Sync & Queue Service**
+  Идемпотентная обработка, разрешение
+  конфликтов остатков/цен при повторном
+  подключении магазина к сети.
+end note
+
+
+Lay_R(buyer, cashier)
+Lay_D(buyer, store)
+Lay_D(pos, hal)
+Lay_D(hal, fiscal)
+Lay_R(fiscal, terminal)
+Lay_D(fiscal, ofd)
+Lay_R(store, cloud)
+Lay_D(gw, backend)
+Lay_R(backend, catalog)
+Lay_D(pgw, sync)
+Lay_R(pgw, promo)
+Lay_D(sync, sap)
+legend right
+  <#1168bd> Cloud-native слой (управляется VitaStore, облако)
+  <#6E6E00> Local HAL — слой абстракции оборудования (edge, у магазина)
+  <#888888> ОФД — внешняя система, обязательна по 54-ФЗ
+  <#888888> SAP ERP — существующая система, интеграция через событийную шину вместо FTP
+endlegend
+@enduml

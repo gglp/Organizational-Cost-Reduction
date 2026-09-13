@@ -1,0 +1,71 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title C4 Container Diagram — кассовая зона VitaStore (AS-IS, исправлено по артефактам 2-3)
+
+Person(buyer, "Покупатель", "Оплачивает покупку наличными или картой")
+Person(cashier, "Кассир", "Оформляет продажу на кассе")
+
+System_Boundary(store, "Магазин (типовая точка, 500+ шт.)") {
+    Container(pos, "POS-приложение", "Windows Desktop App, толстый клиент", "Пробитие чеков, расчёт, обращение к БД и устройствам")
+    ContainerDb(localdb, "Локальная БД", "MS SQL Server / PostgreSQL", "Номенклатура, цены, транзакции — на ПК в подсобке, без резервирования (SPOF)")
+    Container(fiscal, "Фискальный регистратор", "USB, проприетарный протокол", "Печать и фискализация чека")
+    Container(terminal, "Банковский терминал", "USB/serial, проприетарный протокол", "Сбербанк / Альфа / Ingenico / Verifone — свой драйвер под каждый (bottleneck онбординга)")
+}
+
+System_Boundary(hq, "Центральный офис (HQ)") {
+    System(sap, "SAP ERP", "on-premise — товары, финансы, кадры")
+    System(promo, "Promo / Loyalty Engine", "on-premise — промоакции и программа лояльности")
+}
+
+Rel(buyer, pos, "Оплата, получение чека")
+Rel(cashier, pos, "Операции по продаже")
+Rel(pos, localdb, "Чтение/запись", "JDBC, локально")
+Rel(pos, fiscal, "Печать чека", "USB, проприетарный протокол")
+Rel(pos, terminal, "Оплата картой", "USB/serial, проприетарный протокол")
+Rel(sap, localdb, "Ночной пакетный обмен прайс-листом (XML)", "FTP push, 02:00, без подтверждения доставки")
+Rel(pos, promo, "Применение баллов лояльности", "Online, синхронный HTTP-вызов")
+
+note right of localdb
+  **Проблема: единая точка отказа**
+  Физический сервер без резервирования.
+  Отказ диска — простой магазина 4-6 часов,
+  требуется выезд ИТ-инженера (тикет INC-8433).
+end note
+
+note right of terminal
+  **Проблема: разнородное "железо"**
+  У каждого банка/вендора свой протокол.
+  Новый терминал = новый драйвер и пересборка
+  кассы, до 3 недель (тикет INC-8415).
+end note
+
+note bottom of promo
+  **Проблема: нет офлайн-режима**
+  При обрыве интернет-канала магазина касса
+  не может применить баллы лояльности —
+  таймаут на кассе (тикет INC-8402).
+end note
+
+note "**Исправление артефакта 1**\nВики-схема утверждала интеграцию кассы с SAP по REST API\nв реальном времени. Регламент «Интеграция новой точки» (п.7.1)\nи тикеты Service Desk показывают: фактически это ночной\nпакетный обмен по FTP без подтверждения доставки.\nСхема исправлена по факту." as N1
+N1 .. sap
+N1 .. localdb
+
+Lay_R(buyer, cashier)
+Lay_D(buyer, store)
+Lay_D(cashier, store)
+Lay_R(pos, localdb)
+Lay_D(pos, fiscal)
+Lay_D(localdb, terminal)
+Lay_D(store, hq)
+Lay_R(sap, promo)
+
+legend right
+  <#FF0000> Единая точка отказа: локальная БД без резервирования
+  <#FF7700> Разнородные протоколы платёжных терминалов
+  <#FF7700> Нет офлайн-режима для программы лояльности
+  <#888888> Артефакт 1 (вики-схема) исправлен: FTP-batch вместо заявленного REST real-time
+endlegend
+@enduml
